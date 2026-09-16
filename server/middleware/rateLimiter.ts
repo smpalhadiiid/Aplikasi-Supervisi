@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { AuthenticatedRequest } from './auth';
 
 export const aiRateLimiter = rateLimit({
@@ -6,9 +6,12 @@ export const aiRateLimiter = rateLimit({
   max: 30, // Limit each user / IP to 30 AI requests per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
+  keyGenerator: (req, res) => {
     const authReq = req as AuthenticatedRequest;
-    return authReq.user?.id || req.ip || 'anonymous';
+    if (authReq.user?.id) {
+      return authReq.user.id;
+    }
+    return ipKeyGenerator(req.ip || '127.0.0.1');
   },
   handler: (_req, res) => {
     return res.status(429).json({
@@ -18,3 +21,4 @@ export const aiRateLimiter = rateLimit({
     });
   },
 });
+
