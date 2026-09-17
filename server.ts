@@ -4,6 +4,14 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import aiRoutes from "./server/routes/ai";
 
+// Process level safety handlers
+process.on("unhandledRejection", (reason) => {
+  console.error("[Unhandled Rejection]:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[Uncaught Exception]:", error);
+});
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -42,13 +50,15 @@ async function startServer() {
     app.use(vite.middlewares);
 
     // Fallback for SPA client-side routing in dev mode
-    app.use("*", async (req, res, next) => {
-      const url = req.originalUrl;
+    app.get("*", async (req, res, next) => {
+      if (req.originalUrl.startsWith("/api")) {
+        return next();
+      }
       try {
         const indexPath = path.resolve(process.cwd(), "index.html");
         if (fs.existsSync(indexPath)) {
           let template = fs.readFileSync(indexPath, "utf-8");
-          template = await vite.transformIndexHtml(url, template);
+          template = await vite.transformIndexHtml(req.originalUrl, template);
           res.status(200).set({ "Content-Type": "text/html" }).end(template);
         } else {
           next();

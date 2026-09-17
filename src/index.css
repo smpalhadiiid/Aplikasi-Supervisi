@@ -31,50 +31,7 @@
       display: none !important;
     }
 
-    /* Convert dark background cards into high-contrast printable document boxes */
-    .bg-slate-900,
-    .bg-slate-950,
-    .bg-gradient-to-br,
-    .from-emerald-950,
-    .to-teal-950 {
-      background: #f8fafc !important;
-      color: #0f172a !important;
-      border: 1px solid #cbd5e1 !important;
-      box-shadow: none !important;
-    }
-
-    .text-white,
-    .text-slate-200,
-    .text-slate-300,
-    .text-emerald-300,
-    .text-emerald-400,
-    .text-amber-200,
-    .text-rose-300,
-    .text-sky-300 {
-      color: #0f172a !important;
-    }
-
-    body.print-transkrip-only nav,
-    body.print-transkrip-only aside,
-    body.print-transkrip-only header,
-    body.print-transkrip-only .no-print-transkrip {
-      display: none !important;
-    }
-
-    body.print-transkrip-only main {
-      display: block !important;
-      position: static !important;
-      background: #ffffff !important;
-      overflow: visible !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      width: 100% !important;
-      max-width: 100% !important;
-      border: none !important;
-      box-shadow: none !important;
-    }
-
-    /* Reset fixed overlays and modal dialog wrappers */
+    /* Convert modal container for full printable document layout */
     .fixed,
     .fixed.inset-0 {
       position: static !important;
@@ -114,6 +71,7 @@
     /* Printable document layout */
     main,
     .printable-area,
+    #lembar-rincian-cetak,
     #rapor-transkrip-print-content {
       margin: 0 !important;
       padding: 0 !important;
@@ -122,6 +80,24 @@
       box-shadow: none !important;
       border: none !important;
       overflow: visible !important;
+      background: #ffffff !important;
+      color: #0f172a !important;
+    }
+
+    /* High contrast table borders */
+    #lembar-rincian-cetak table,
+    #lembar-rincian-cetak th,
+    #lembar-rincian-cetak td {
+      border-color: #94a3b8 !important;
+    }
+
+    #lembar-rincian-cetak .bg-slate-100 {
+      background-color: #f1f5f9 !important;
+    }
+
+    #lembar-rincian-cetak .bg-slate-200\/70,
+    #lembar-rincian-cetak .bg-slate-200 {
+      background-color: #e2e8f0 !important;
     }
 
     /* Page breaks */

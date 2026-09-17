@@ -3,7 +3,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { RppReview, Supervision, Instrument, Teacher } from '../../types';
 import { db } from '../../lib/db';
-import { triggerPrint } from '../../lib/print';
+import { triggerPrint, convertColorToRgb } from '../../lib/print';
 import { Modal } from './Modal';
 import { Printer, Download, X, Image as ImageIcon, CheckCircle, Award } from 'lucide-react';
 
@@ -87,22 +87,6 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
     try {
       setIsExporting(true);
 
-      const parseColorToRgb = (colorStr: string): string => {
-        try {
-          const tempEl = document.createElement('div');
-          tempEl.style.color = colorStr;
-          document.body.appendChild(tempEl);
-          const computed = window.getComputedStyle(tempEl).color;
-          document.body.removeChild(tempEl);
-          if (computed && !computed.includes('oklch') && !computed.includes('oklab')) {
-            return computed;
-          }
-        } catch {
-          // ignore error
-        }
-        return '#000000';
-      };
-
       const canvas = await html2canvas(printRef.current, {
         scale: 2,
         useCORS: true,
@@ -114,7 +98,7 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
           styleEls.forEach((styleEl) => {
             if (styleEl.textContent && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleEl.textContent)) {
               styleEl.textContent = styleEl.textContent.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) => {
-                return parseColorToRgb(match);
+                return convertColorToRgb(match);
               });
             }
           });
@@ -129,7 +113,7 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
             if (styleAttr && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleAttr)) {
               htmlEl.setAttribute(
                 'style',
-                styleAttr.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) => parseColorToRgb(match))
+                styleAttr.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) => convertColorToRgb(match))
               );
             }
 
@@ -138,7 +122,7 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
               colorProps.forEach((prop) => {
                 const val = computed.getPropertyValue(prop);
                 if (val && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(val)) {
-                  htmlEl.style.setProperty(prop, parseColorToRgb(val));
+                  htmlEl.style.setProperty(prop, convertColorToRgb(val));
                 }
               });
             }
