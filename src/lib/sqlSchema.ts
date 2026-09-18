@@ -213,46 +213,79 @@ ALTER TABLE public.supervision_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_analyses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.follow_up_plans ENABLE ROW LEVEL SECURITY;
 
--- Helper Function: Check User Role
+-- Helper Function: Check User Role with fixed search_path to prevent privilege escalation
 CREATE OR REPLACE FUNCTION public.get_current_user_role()
-RETURNS VARCHAR AS $$
+RETURNS VARCHAR
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+STABLE
+AS $$
   SELECT role FROM public.users WHERE id = auth.uid();
-$$ LANGUAGE sql SECURITY DEFINER;
+$$;
 
--- Helper Function: Check User School ID
+-- Helper Function: Check User School ID with fixed search_path
 CREATE OR REPLACE FUNCTION public.get_current_user_school_id()
-RETURNS UUID AS $$
+RETURNS UUID
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+STABLE
+AS $$
   SELECT school_id FROM public.users WHERE id = auth.uid();
-$$ LANGUAGE sql SECURITY DEFINER;
+$$;
 
 -- Drop old policies to prevent "policy already exists" error
 DROP POLICY IF EXISTS "Supervisors and Admins can view school data" ON public.schools;
 DROP POLICY IF EXISTS "Admins can update school info" ON public.schools;
+DROP POLICY IF EXISTS "Users can view own profile or same school profiles" ON public.users;
+DROP POLICY IF EXISTS "Admins manage users in school" ON public.users;
 DROP POLICY IF EXISTS "Admins & Supervisors view teachers in their school" ON public.teachers;
 DROP POLICY IF EXISTS "Teachers view their own teacher profile" ON public.teachers;
 DROP POLICY IF EXISTS "Admins manage teachers" ON public.teachers;
 DROP POLICY IF EXISTS "All authenticated users can view active instruments" ON public.instruments;
 DROP POLICY IF EXISTS "Only Admin can manage instruments" ON public.instruments;
+DROP POLICY IF EXISTS "Users can view instrument sections" ON public.instrument_sections;
+DROP POLICY IF EXISTS "Admins manage instrument sections" ON public.instrument_sections;
+DROP POLICY IF EXISTS "Users can view instrument items" ON public.instrument_items;
+DROP POLICY IF EXISTS "Admins manage instrument items" ON public.instrument_items;
 DROP POLICY IF EXISTS "Supervisors and Admins view RPP reviews in school" ON public.rpp_reviews;
 DROP POLICY IF EXISTS "Guru views their own RPP reviews" ON public.rpp_reviews;
 DROP POLICY IF EXISTS "Supervisors and Admins manage RPP reviews" ON public.rpp_reviews;
+DROP POLICY IF EXISTS "Users view RPP review items" ON public.rpp_review_items;
+DROP POLICY IF EXISTS "Supervisors and Admins manage RPP review items" ON public.rpp_review_items;
 DROP POLICY IF EXISTS "Supervisors and Admins view supervisions in school" ON public.supervisions;
 DROP POLICY IF EXISTS "Guru views their own supervisions" ON public.supervisions;
 DROP POLICY IF EXISTS "Supervisors and Admins manage supervisions" ON public.supervisions;
+DROP POLICY IF EXISTS "Users view supervision items" ON public.supervision_items;
+DROP POLICY IF EXISTS "Supervisors and Admins manage supervision items" ON public.supervision_items;
+DROP POLICY IF EXISTS "Users view ai analyses in school" ON public.ai_analyses;
+DROP POLICY IF EXISTS "Supervisors and Admins manage ai analyses" ON public.ai_analyses;
 DROP POLICY IF EXISTS "Supervisors and Admins view follow up plans" ON public.follow_up_plans;
 DROP POLICY IF EXISTS "Guru views their own follow up recommendations" ON public.follow_up_plans;
 DROP POLICY IF EXISTS "Supervisors and Admins create & edit follow up plans" ON public.follow_up_plans;
 
--- Kebijakan RLS untuk TABEL SCHOOLS
+-- 1. Kebijakan RLS untuk TABEL SCHOOLS
 CREATE POLICY "Supervisors and Admins can view school data"
 ON public.schools FOR SELECT
 USING (id = public.get_current_user_school_id());
 
 CREATE POLICY "Admins can update school info"
 ON public.schools FOR UPDATE
-USING (id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
+USING (id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')
+WITH CHECK (id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
 
--- Kebijakan RLS untuk TABEL TEACHERS
+-- 2. Kebijakan RLS untuk TABEL USERS
+CREATE POLICY "Users can view own profile or same school profiles"
+ON public.users FOR SELECT
+USING (id = auth.uid() OR school_id = public.get_current_user_school_id());
+
+CREATE POLICY "Admins manage users in school"
+ON public.users FOR ALL
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
+
+-- 3. Kebijakan RLS untuk TABEL TEACHERS
 CREATE POLICY "Admins & Supervisors view teachers in their school"
 ON public.teachers FOR SELECT
 USING (school_id = public.get_current_user_school_id());
@@ -263,18 +296,39 @@ USING (user_id = auth.uid());
 
 CREATE POLICY "Admins manage teachers"
 ON public.teachers FOR ALL
-USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
 
--- Kebijakan RLS untuk TABEL INSTRUMENTS & ITEMS
+-- 4. Kebijakan RLS untuk TABEL INSTRUMENTS
 CREATE POLICY "All authenticated users can view active instruments"
 ON public.instruments FOR SELECT
 USING (school_id IS NULL OR school_id = public.get_current_user_school_id());
 
 CREATE POLICY "Only Admin can manage instruments"
 ON public.instruments FOR ALL
-USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN');
 
--- Kebijakan RLS untuk RPP_REVIEWS
+-- 5. Kebijakan RLS untuk TABEL INSTRUMENT SECTIONS & ITEMS
+CREATE POLICY "Users can view instrument sections"
+ON public.instrument_sections FOR SELECT
+USING (instrument_id IN (SELECT id FROM public.instruments WHERE school_id IS NULL OR school_id = public.get_current_user_school_id()));
+
+CREATE POLICY "Admins manage instrument sections"
+ON public.instrument_sections FOR ALL
+USING (instrument_id IN (SELECT id FROM public.instruments WHERE school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN'))
+WITH CHECK (instrument_id IN (SELECT id FROM public.instruments WHERE school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN'));
+
+CREATE POLICY "Users can view instrument items"
+ON public.instrument_items FOR SELECT
+USING (section_id IN (SELECT id FROM public.instrument_sections WHERE instrument_id IN (SELECT id FROM public.instruments WHERE school_id IS NULL OR school_id = public.get_current_user_school_id())));
+
+CREATE POLICY "Admins manage instrument items"
+ON public.instrument_items FOR ALL
+USING (section_id IN (SELECT id FROM public.instrument_sections WHERE instrument_id IN (SELECT id FROM public.instruments WHERE school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')))
+WITH CHECK (section_id IN (SELECT id FROM public.instrument_sections WHERE instrument_id IN (SELECT id FROM public.instruments WHERE school_id = public.get_current_user_school_id() AND public.get_current_user_role() = 'ADMIN')));
+
+-- 6. Kebijakan RLS untuk RPP_REVIEWS
 CREATE POLICY "Supervisors and Admins view RPP reviews in school"
 ON public.rpp_reviews FOR SELECT
 USING (school_id = public.get_current_user_school_id());
@@ -285,9 +339,32 @@ USING (teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
 
 CREATE POLICY "Supervisors and Admins manage RPP reviews"
 ON public.rpp_reviews FOR ALL
-USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'))
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
 
--- Kebijakan RLS untuk SUPERVISIONS
+-- 7. Kebijakan RLS untuk RPP REVIEW ITEMS
+CREATE POLICY "Users view RPP review items"
+ON public.rpp_review_items FOR SELECT
+USING (rpp_review_id IN (
+  SELECT id FROM public.rpp_reviews
+  WHERE school_id = public.get_current_user_school_id()
+  OR teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
+));
+
+CREATE POLICY "Supervisors and Admins manage RPP review items"
+ON public.rpp_review_items FOR ALL
+USING (rpp_review_id IN (
+  SELECT id FROM public.rpp_reviews
+  WHERE school_id = public.get_current_user_school_id()
+  AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR')
+))
+WITH CHECK (rpp_review_id IN (
+  SELECT id FROM public.rpp_reviews
+  WHERE school_id = public.get_current_user_school_id()
+  AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR')
+));
+
+-- 8. Kebijakan RLS untuk SUPERVISIONS
 CREATE POLICY "Supervisors and Admins view supervisions in school"
 ON public.supervisions FOR SELECT
 USING (school_id = public.get_current_user_school_id());
@@ -298,9 +375,50 @@ USING (teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
 
 CREATE POLICY "Supervisors and Admins manage supervisions"
 ON public.supervisions FOR ALL
-USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'))
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
 
--- Kebijakan RLS untuk FOLLOW UP PLANS
+-- 9. Kebijakan RLS untuk SUPERVISION ITEMS
+CREATE POLICY "Users view supervision items"
+ON public.supervision_items FOR SELECT
+USING (supervision_id IN (
+  SELECT id FROM public.supervisions
+  WHERE school_id = public.get_current_user_school_id()
+  OR teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
+));
+
+CREATE POLICY "Supervisors and Admins manage supervision items"
+ON public.supervision_items FOR ALL
+USING (supervision_id IN (
+  SELECT id FROM public.supervisions
+  WHERE school_id = public.get_current_user_school_id()
+  AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR')
+))
+WITH CHECK (supervision_id IN (
+  SELECT id FROM public.supervisions
+  WHERE school_id = public.get_current_user_school_id()
+  AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR')
+));
+
+-- 10. Kebijakan RLS untuk AI ANALYSES
+CREATE POLICY "Users view ai analyses in school"
+ON public.ai_analyses FOR SELECT
+USING (
+  (reference_type = 'RPP_REVIEW' AND reference_id IN (
+    SELECT id FROM public.rpp_reviews WHERE school_id = public.get_current_user_school_id() OR teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
+  ))
+  OR
+  (reference_type = 'SUPERVISION' AND reference_id IN (
+    SELECT id FROM public.supervisions WHERE school_id = public.get_current_user_school_id() OR teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
+  ))
+);
+
+CREATE POLICY "Supervisors and Admins manage ai analyses"
+ON public.ai_analyses FOR ALL
+USING (public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'))
+WITH CHECK (public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
+
+-- 11. Kebijakan RLS untuk FOLLOW UP PLANS
 CREATE POLICY "Supervisors and Admins view follow up plans"
 ON public.follow_up_plans FOR SELECT
 USING (school_id = public.get_current_user_school_id());
@@ -311,5 +429,48 @@ USING (teacher_id IN (SELECT id FROM public.teachers WHERE user_id = auth.uid())
 
 CREATE POLICY "Supervisors and Admins create & edit follow up plans"
 ON public.follow_up_plans FOR ALL
-USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
+USING (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'))
+WITH CHECK (school_id = public.get_current_user_school_id() AND public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR'));
+
+-- ====================================================================
+-- KONFIGURASI SUPABASE STORAGE PRIVATE BUCKET: rpp_documents
+-- ====================================================================
+
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'rpp_documents',
+  'rpp_documents',
+  false,
+  20971520, -- 20MB
+  ARRAY['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = false,
+  file_size_limit = 20971520,
+  allowed_mime_types = ARRAY['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
+
+-- Kebijakan Storage RLS untuk akses private
+DROP POLICY IF EXISTS "School members can access their school documents" ON storage.objects;
+DROP POLICY IF EXISTS "Users can upload documents in their school" ON storage.objects;
+
+CREATE POLICY "School members can access their school documents"
+ON storage.objects FOR SELECT
+USING (
+  bucket_id = 'rpp_documents'
+  AND (
+    -- Admin & Supervisor dapat mengakses seluruh dokumen di sekolahnya
+    (public.get_current_user_role() IN ('ADMIN', 'SUPERVISOR') AND name LIKE 'schools/' || public.get_current_user_school_id()::text || '/%')
+    OR
+    -- Guru hanya dapat mengakses dokumen pada foldernya sendiri
+    (name LIKE 'schools/' || public.get_current_user_school_id()::text || '/teachers/' || (SELECT id::text FROM public.teachers WHERE user_id = auth.uid()) || '/%')
+  )
+);
+
+CREATE POLICY "Users can upload documents in their school"
+ON storage.objects FOR INSERT
+WITH CHECK (
+  bucket_id = 'rpp_documents'
+  AND name LIKE 'schools/' || public.get_current_user_school_id()::text || '/%'
+);
+
 `;

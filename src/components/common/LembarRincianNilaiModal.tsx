@@ -1,9 +1,7 @@
 import React, { useRef, useState } from 'react';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
 import { RppReview, Supervision, Instrument, Teacher } from '../../types';
 import { db } from '../../lib/db';
-import { triggerPrint, convertColorToRgb } from '../../lib/print';
+import { triggerPrint, downloadElementAsPdf } from '../../lib/print';
 import { Modal } from './Modal';
 import { Printer, Download, X, Image as ImageIcon, CheckCircle, Award } from 'lucide-react';
 
@@ -86,88 +84,11 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
     if (!printRef.current) return;
     try {
       setIsExporting(true);
-
-      const canvas = await html2canvas(printRef.current, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc) => {
-          // 1. Sanitize all <style> tags in cloned DOM to replace oklch/oklab(...) with resolved rgb/hex
-          const styleEls = Array.from(clonedDoc.querySelectorAll('style'));
-          styleEls.forEach((styleEl) => {
-            if (styleEl.textContent && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleEl.textContent)) {
-              styleEl.textContent = styleEl.textContent.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) => {
-                return convertColorToRgb(match);
-              });
-            }
-          });
-
-          // 2. Sanitize inline style attributes & computed styles of cloned elements
-          const colorProps = ['color', 'background-color', 'border-color', 'outline-color', 'fill', 'stroke'];
-          const allElements = Array.from(clonedDoc.querySelectorAll('*'));
-
-          allElements.forEach((el) => {
-            const htmlEl = el as HTMLElement;
-            const styleAttr = htmlEl.getAttribute?.('style');
-            if (styleAttr && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleAttr)) {
-              htmlEl.setAttribute(
-                'style',
-                styleAttr.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) => convertColorToRgb(match))
-              );
-            }
-
-            if (clonedDoc.defaultView) {
-              const computed = clonedDoc.defaultView.getComputedStyle(htmlEl);
-              colorProps.forEach((prop) => {
-                const val = computed.getPropertyValue(prop);
-                if (val && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(val)) {
-                  htmlEl.style.setProperty(prop, convertColorToRgb(val));
-                }
-              });
-            }
-          });
-        },
-      });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      });
-
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-
-      const pageImgHeight = (imgHeight * pdfWidth) / imgWidth;
-
-      if (pageImgHeight <= pdfHeight) {
-        // Single page fit
-        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pageImgHeight);
-      } else {
-        // Multi-page slicing for longer documents
-        let heightLeft = pageImgHeight;
-        let position = 0;
-
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pageImgHeight);
-        heightLeft -= pdfHeight;
-
-        while (heightLeft > 0) {
-          position -= pdfHeight;
-          pdf.addPage();
-          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pageImgHeight);
-          heightLeft -= pdfHeight;
-        }
-      }
-
       const filename = `Lembar_Nilai_${type}_${teacherName.replace(/\s+/g, '_')}_${data.semester}_${data.academic_year.replace('/', '-')}.pdf`;
-      pdf.save(filename);
+      await downloadElementAsPdf(printRef.current, filename);
     } catch (err) {
       console.error('Failed generating PDF:', err);
-      alert('Gagal mengunduh PDF. Silakan gunakan tombol Cetak.');
+      triggerPrint();
     } finally {
       setIsExporting(false);
     }
@@ -178,7 +99,7 @@ export const LembarRincianNilaiModal: React.FC<LembarRincianNilaiModalProps> = (
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="max-w-5xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="4xl">
       {/* Top Action Bar (hidden in print mode) */}
       <div className="no-print mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 p-3 rounded-lg">
         <div className="text-xs text-slate-600">

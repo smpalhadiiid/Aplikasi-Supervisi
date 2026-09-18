@@ -153,9 +153,6 @@ export const RppAiReviewFlow: React.FC<RppAiReviewFlowProps> = ({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-Role': currentUser?.role || 'SUPERVISOR',
-            'X-User-Id': currentUser?.id || '',
-            'X-User-Email': currentUser?.email || '',
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           body: JSON.stringify({

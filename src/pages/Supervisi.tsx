@@ -268,9 +268,6 @@ export const Supervisi: React.FC = () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-User-Role': currentUser?.role || 'SUPERVISOR',
-            'X-User-Id': currentUser?.id || '',
-            'X-User-Email': currentUser?.email || '',
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({

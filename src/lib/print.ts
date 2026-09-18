@@ -1,3 +1,6 @@
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+
 /**
  * Converts modern CSS colors (oklch, oklab, lab, lch) to browser-compatible RGB strings
  * Fixes html2canvas black rectangle rendering issues in Tailwind v4
@@ -104,14 +107,113 @@ export function triggerPrint() {
   const originalOverflow = document.body.style.overflow;
   document.body.style.overflow = 'visible';
   document.body.classList.add('is-printing');
+  window.scrollTo(0, 0);
 
-  // Short delay to ensure DOM and CSS render printable layout
+  // Delay to ensure DOM and CSS render printable layout
   setTimeout(() => {
     window.print();
     setTimeout(() => {
       document.body.classList.remove('is-printing');
       document.body.style.overflow = originalOverflow;
     }, 500);
-  }, 150);
+  }, 250);
 }
+
+/**
+ * Export a DOM element directly to a downloadable PDF with OKLCH sanitization
+ */
+export async function downloadElementAsPdf(
+  element: HTMLElement,
+  filename: string
+): Promise<boolean> {
+  try {
+    window.scrollTo(0, 0);
+
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      onclone: (clonedDoc) => {
+        // 1. Sanitize style tags
+        const styleEls = Array.from(clonedDoc.querySelectorAll('style'));
+        styleEls.forEach((styleEl) => {
+          if (styleEl.textContent && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleEl.textContent)) {
+            styleEl.textContent = styleEl.textContent.replace(
+              /(oklch|oklab|lab|lch)\([^)]+\)/gi,
+              (match) => convertColorToRgb(match)
+            );
+          }
+        });
+
+        // 2. Sanitize inline attributes
+        const colorProps = ['color', 'background-color', 'border-color', 'outline-color', 'fill', 'stroke'];
+        const allElements = Array.from(clonedDoc.querySelectorAll('*'));
+        allElements.forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          const styleAttr = htmlEl.getAttribute?.('style');
+          if (styleAttr && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(styleAttr)) {
+            htmlEl.setAttribute(
+              'style',
+              styleAttr.replace(/(oklch|oklab|lab|lch)\([^)]+\)/gi, (match) =>
+                convertColorToRgb(match)
+              )
+            );
+          }
+
+          if (clonedDoc.defaultView) {
+            const computed = clonedDoc.defaultView.getComputedStyle(htmlEl);
+            colorProps.forEach((prop) => {
+              const val = computed.getPropertyValue(prop);
+              if (val && /(oklch|oklab|lab|lch)\([^)]+\)/i.test(val)) {
+                htmlEl.style.setProperty(prop, convertColorToRgb(val));
+              }
+            });
+          }
+        });
+      },
+    });
+
+    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = canvas.width;
+    const imgHeight = canvas.height;
+
+    const pageImgHeight = (imgHeight * pdfWidth) / imgWidth;
+
+    if (pageImgHeight <= pdfHeight) {
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pageImgHeight);
+    } else {
+      let heightLeft = pageImgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pageImgHeight);
+      heightLeft -= pdfHeight;
+
+      while (heightLeft > 0) {
+        position -= pdfHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pageImgHeight);
+        heightLeft -= pdfHeight;
+      }
+    }
+
+    const safeFilename = filename.endsWith('.pdf') ? filename : `${filename}.pdf`;
+    pdf.save(safeFilename);
+    return true;
+  } catch (err) {
+    console.error('downloadElementAsPdf error:', err);
+    // Fallback: trigger print
+    triggerPrint();
+    return false;
+  }
+}
+
 

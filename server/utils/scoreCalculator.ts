@@ -3,6 +3,8 @@ export interface ScoreSummary {
   maxPossibleScore: number;
   percentageScore: number;
   predicate: string;
+  isComplete: boolean;
+  status: 'COMPLETED' | 'BELUM LENGKAP';
 }
 
 export function calculateRppScore(
@@ -11,12 +13,37 @@ export function calculateRppScore(
 ): ScoreSummary {
   let totalScore = 0;
   let maxPossibleScore = 0;
+  let hasIncompleteItems = false;
+  let activeItemCount = 0;
 
   for (const [_, item] of Object.entries(itemScores)) {
     if (item.is_active === false) continue;
-    const score = Math.max(1, Math.min(maxPerItem, item.score || 1));
+    activeItemCount++;
+
+    const rawScore = item.score;
+    // Jika belum dinilai atau 0
+    if (rawScore === undefined || rawScore === null || rawScore === 0) {
+      hasIncompleteItems = true;
+      maxPossibleScore += maxPerItem;
+      continue;
+    }
+
+    const score = Math.max(1, Math.min(maxPerItem, Math.round(rawScore)));
     totalScore += score;
     maxPossibleScore += maxPerItem;
+  }
+
+  if (activeItemCount === 0 || hasIncompleteItems) {
+    const percentageScore =
+      maxPossibleScore > 0 ? Math.round((totalScore / maxPossibleScore) * 100 * 100) / 100 : 0;
+    return {
+      totalScore,
+      maxPossibleScore,
+      percentageScore,
+      predicate: "Belum Lengkap",
+      isComplete: false,
+      status: "BELUM LENGKAP",
+    };
   }
 
   const percentageScore =
@@ -32,6 +59,8 @@ export function calculateRppScore(
     maxPossibleScore,
     percentageScore,
     predicate,
+    isComplete: true,
+    status: "COMPLETED",
   };
 }
 
@@ -41,12 +70,36 @@ export function calculateSupervisionScore(
 ): ScoreSummary {
   let totalScore = 0;
   let maxPossibleScore = 0;
+  let hasIncompleteItems = false;
+  let activeItemCount = 0;
 
   for (const [_, item] of Object.entries(itemScores)) {
     if (item.is_active === false) continue;
-    const score = Math.max(1, Math.min(maxPerItem, item.score || 1));
+    activeItemCount++;
+
+    const rawScore = item.score;
+    if (rawScore === undefined || rawScore === null || rawScore === 0) {
+      hasIncompleteItems = true;
+      maxPossibleScore += maxPerItem;
+      continue;
+    }
+
+    const score = Math.max(1, Math.min(maxPerItem, Math.round(rawScore)));
     totalScore += score;
     maxPossibleScore += maxPerItem;
+  }
+
+  if (activeItemCount === 0 || hasIncompleteItems) {
+    const percentageScore =
+      maxPossibleScore > 0 ? Math.round((totalScore / maxPossibleScore) * 100 * 100) / 100 : 0;
+    return {
+      totalScore,
+      maxPossibleScore,
+      percentageScore,
+      predicate: "Belum Lengkap",
+      isComplete: false,
+      status: "BELUM LENGKAP",
+    };
   }
 
   const percentageScore =
@@ -62,5 +115,49 @@ export function calculateSupervisionScore(
     maxPossibleScore,
     percentageScore,
     predicate,
+    isComplete: true,
+    status: "COMPLETED",
   };
 }
+
+/**
+ * Perhitungan skor gabungan terbobot:
+ * Nilai Akhir = (bobot_rpp * skor_rpp + bobot_supervisi * skor_supervisi) / 100
+ */
+export function calculateCompositeScore(
+  rppScore: number,
+  supScore: number,
+  rppWeight: number = 40,
+  supWeight: number = 60
+): { compositeScore: number; predicate: string; status: 'COMPLETED' | 'BELUM LENGKAP' } {
+  if (rppScore <= 0 && supScore <= 0) {
+    return {
+      compositeScore: 0,
+      predicate: 'Belum Lengkap',
+      status: 'BELUM LENGKAP',
+    };
+  }
+
+  let compositeScore = 0;
+  if (rppScore > 0 && supScore > 0) {
+    const totalWeight = rppWeight + supWeight;
+    compositeScore =
+      Math.round(((rppScore * rppWeight + supScore * supWeight) / totalWeight) * 10) / 10;
+  } else if (rppScore > 0) {
+    compositeScore = Math.round(rppScore * 10) / 10;
+  } else if (supScore > 0) {
+    compositeScore = Math.round(supScore * 10) / 10;
+  }
+
+  let predicate = "Perlu Pembinaan";
+  if (compositeScore >= 85) predicate = "Amat Baik";
+  else if (compositeScore >= 75) predicate = "Baik";
+  else if (compositeScore >= 60) predicate = "Cukup";
+
+  return {
+    compositeScore,
+    predicate,
+    status: "COMPLETED",
+  };
+}
+

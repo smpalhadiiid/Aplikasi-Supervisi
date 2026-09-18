@@ -247,8 +247,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 
         {/* Teachers Needing Follow Up */}
         <Card
-          title="Guru Membutuhkan Tindak Lanjut"
-          subtitle="Daftar guru yang memerlukan pendampingan khusus"
+          title={role === 'GURU' ? 'Status Tindak Lanjut Saya' : 'Guru Membutuhkan Tindak Lanjut'}
+          subtitle={role === 'GURU' ? 'Rencana pengembangan diri dan hasil evaluasi pembelajaran' : 'Daftar guru yang memerlukan pendampingan khusus'}
           className="lg:col-span-5"
           action={
             <button
@@ -262,7 +262,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         >
           {stats.teachersNeedingFollowUp.length === 0 ? (
             <div className="py-8 text-center text-slate-400 text-xs">
-              Seluruh guru telah mencapai nilai standar minimun (&gt;75%).
+              {role === 'GURU'
+                ? 'Target kompetensi pembelajaran telah tercapai dengan baik (>75%).'
+                : 'Seluruh guru telah mencapai nilai standar minimun (>75%).'}
             </div>
           ) : (
             <div className="space-y-3">
@@ -276,12 +278,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                       <AlertTriangle className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-bold text-slate-800">{teacher.full_name}</div>
+                      <div className="text-xs font-bold text-slate-800">{role === 'GURU' ? 'Program Bimbingan Anda' : teacher.full_name}</div>
                       <div className="text-[11px] text-slate-500">{teacher.subject} • {teacher.class_grade}</div>
                     </div>
                   </div>
                   <Badge variant="warning" size="sm">
-                    Perlu Pendampingan
+                    {role === 'GURU' ? 'Perlu Dilengkapi' : 'Perlu Pendampingan'}
                   </Badge>
                 </div>
               ))}

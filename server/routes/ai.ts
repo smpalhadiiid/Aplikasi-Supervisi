@@ -4,7 +4,11 @@ import { aiRateLimiter } from '../middleware/rateLimiter';
 import { AnalyzeRppRequestSchema, AnalyzeGeneralRequestSchema } from '../validators/aiSchemas';
 import { extractDocumentContent } from '../services/documentExtractor';
 import { analyzeRppDocumentWithGemini, analyzeGeneralObservationWithGemini } from '../services/aiService';
-import { createShortLivedSignedUrl } from '../services/storageService';
+import {
+  createShortLivedSignedUrl,
+  uploadPrivateDocument,
+  validateDocumentFile,
+} from '../services/storageService';
 
 const router = Router();
 
@@ -49,6 +53,25 @@ router.post(
       // Extract document content securely
       const docExtraction = await extractDocumentContent(docBuffer, fileType);
 
+      // FASE 7: Jika file tidak terbaca (unreadable/terlalu pendek/hasil scan gambar),
+      // JANGAN memberikan analisis seolah-olah valid atau score AI berdasarkan placeholder!
+      if (docExtraction.isUnreadable) {
+        return res.status(200).json({
+          success: false,
+          error: 'UNREADABLE_DOCUMENT',
+          isUnreadable: true,
+          message:
+            docExtraction.unreadableReason ||
+            'Dokumen tidak memenuhi kriteria kelayakan pemrosesan teks (teks terlalu singkat atau dokumen merupakan hasil scan tanpa OCR).',
+          documentMeta: {
+            wordCount: docExtraction.wordCount,
+            totalPages: docExtraction.totalPages,
+            isUnreadable: true,
+            unreadableReason: docExtraction.unreadableReason,
+          },
+        });
+      }
+
       // Perform AI Analysis
       const aiResult = await analyzeRppDocumentWithGemini(reqData, docExtraction);
 
@@ -59,8 +82,8 @@ router.post(
         documentMeta: {
           wordCount: docExtraction.wordCount,
           totalPages: docExtraction.totalPages,
-          isUnreadable: docExtraction.isUnreadable,
-          unreadableReason: docExtraction.unreadableReason || null,
+          isUnreadable: false,
+          unreadableReason: null,
         },
       });
     } catch (err: any) {
@@ -108,7 +131,82 @@ router.post(
   }
 );
 
-// Endpoint 3: Short-lived Signed URL for Private Document Viewing
+// Endpoint 3: Upload Dokumen Privat dengan Validasi Magic Bytes & Isolasi Tenant
+router.post(
+  '/document-upload',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { fileName, fileBase64, teacherId, mimeType } = req.body;
+
+      if (!fileName || !fileBase64) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_INPUT',
+          message: 'Nama file dan konten base64 wajib disertakan.',
+        });
+      }
+
+      // Validasi hak kepemilikan guru (Guru hanya boleh upload untuk dirinya sendiri)
+      let resolvedTeacherId = teacherId || req.user?.teacher_id || req.user?.id || 't-default';
+      if (req.user?.role === 'GURU') {
+        if (req.user.teacher_id && resolvedTeacherId !== req.user.teacher_id && resolvedTeacherId !== req.user.id) {
+          return res.status(403).json({
+            success: false,
+            error: 'FORBIDDEN',
+            message: 'Guru hanya diizinkan mengunggah dokumen untuk profil sendiri.',
+          });
+        }
+      }
+
+      const rawBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+      const buffer = Buffer.from(rawBase64, 'base64');
+
+      const validation = validateDocumentFile(buffer, fileName, mimeType);
+      if (!validation.isValid) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_FILE',
+          message: validation.error || 'File tidak memenuhi syarat keamanan.',
+        });
+      }
+
+      const schoolId = req.user?.school_id || 'sch-default';
+      const uploadResult = await uploadPrivateDocument(
+        schoolId,
+        resolvedTeacherId,
+        fileName,
+        buffer,
+        mimeType
+      );
+
+      if (uploadResult.error || !uploadResult.filePath) {
+        return res.status(500).json({
+          success: false,
+          error: 'UPLOAD_FAILED',
+          message: uploadResult.error || 'Gagal menyimpan dokumen ke storage privat.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        filePath: uploadResult.filePath,
+        fileName,
+        fileSize: buffer.length,
+        fileType: validation.detectedType,
+      });
+    } catch (err: any) {
+      console.error('[API Document Upload Error]:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: 'SERVER_ERROR',
+        message: err?.message || 'Terjadi kesalahan saat mengunggah dokumen.',
+      });
+    }
+  }
+);
+
+// Endpoint 4: Short-lived Signed URL for Private Document Viewing
 router.post(
   '/document-signed-url',
   authenticateToken,
@@ -123,26 +221,34 @@ router.post(
         });
       }
 
-      // Verify path starts with user's school_id for isolation
-      const pathParts = filePath.split('/');
-      const pathSchoolId = pathParts[0];
+      // Verifikasi isolasi multi-tenant sekolah: path harus berada di schools/{school_id}/
+      const expectedSchoolPrefix = `schools/${req.user?.school_id}/`;
+      const legacySchoolPrefix = `${req.user?.school_id}/`;
 
-      if (req.user?.role !== 'ADMIN' && pathSchoolId !== req.user?.school_id) {
+      if (
+        req.user?.role !== 'ADMIN' &&
+        !filePath.startsWith(expectedSchoolPrefix) &&
+        !filePath.startsWith(legacySchoolPrefix)
+      ) {
         return res.status(403).json({
           success: false,
           error: 'FORBIDDEN_SCHOOL_ACCESS',
-          message: 'Anda tidak memiliki akses ke dokumen dari sekolah lain.',
+          message: 'Akses ditolak: Dokumen berasal dari sekolah lain.',
         });
       }
 
-      // If GURU, ensure they can only access files in their own folder
+      // Jika role GURU: verifikasi bahwa path dokumen merujuk ke dirinya sendiri
       if (req.user?.role === 'GURU') {
-        const pathUserId = pathParts[1];
-        if (pathUserId !== req.user.id) {
+        const ownTeacherFolder = `/teachers/${req.user.teacher_id}/`;
+        const ownUserFolder = `/${req.user.id}/`;
+        const matchesTeacher = req.user.teacher_id && filePath.includes(ownTeacherFolder);
+        const matchesUser = filePath.includes(ownUserFolder);
+
+        if (!matchesTeacher && !matchesUser) {
           return res.status(403).json({
             success: false,
             error: 'FORBIDDEN_USER_ACCESS',
-            message: 'Anda hanya dapat mengakses dokumen milik sendiri.',
+            message: 'Akses ditolak: Guru hanya dapat mengakses dokumen miliknya sendiri.',
           });
         }
       }
@@ -172,3 +278,4 @@ router.post(
 );
 
 export default router;
+

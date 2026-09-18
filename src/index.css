@@ -4,17 +4,32 @@
   @media print {
     /* Force white background & body reset */
     html,
-    body {
+    body,
+    #root {
       background-color: #ffffff !important;
+      background: #ffffff !important;
       color: #000000 !important;
-      font-size: 11pt !important;
+      font-size: 10pt !important;
       overflow: visible !important;
       height: auto !important;
+      min-height: auto !important;
       width: 100% !important;
       margin: 0 !important;
       padding: 0 !important;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
+    }
+
+    /* Reset all overflow wrappers in layout */
+    .overflow-hidden,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .flex-1,
+    .min-h-screen {
+      overflow: visible !important;
+      height: auto !important;
+      max-height: none !important;
+      min-height: auto !important;
     }
 
     /* Hide non-printable navigation, sidebar, header, backdrops, and interactive buttons */
@@ -27,7 +42,17 @@
     .top-header,
     .toast-container,
     .fixed.inset-0 > div:first-child,
-    .fixed.inset-0 > .bg-slate-900\/60 {
+    .fixed.inset-0 > .bg-slate-900\/60,
+    .backdrop-blur-xs,
+    [role="dialog"] button,
+    .print\:hidden {
+      display: none !important;
+    }
+
+    /* When printing a modal (like transkrip or lembar rincian), hide the background main content */
+    body:has(.fixed.inset-0) main > *:not(.fixed),
+    body.is-printing main > *:not(.fixed),
+    body.print-transkrip-only main > *:not(.fixed) {
       display: none !important;
     }
 
@@ -45,19 +70,21 @@
       padding: 0 !important;
       background: transparent !important;
       transform: none !important;
+      display: block !important;
     }
 
     /* Reset inner modal body max-height and overflow scroll clipping */
     .max-h-\[75vh\],
-    .overflow-y-auto,
     div[class*="overflow-y-auto"] {
       max-height: none !important;
       overflow: visible !important;
       height: auto !important;
+      padding: 0 !important;
     }
 
     /* Reset modal card styling */
-    .relative.w-full.bg-white {
+    .relative.w-full.bg-white,
+    [class*="max-w-"] {
       position: static !important;
       box-shadow: none !important;
       border: none !important;
@@ -82,13 +109,24 @@
       overflow: visible !important;
       background: #ffffff !important;
       color: #0f172a !important;
+      display: block !important;
     }
 
-    /* High contrast table borders */
+    /* High contrast table borders & readable prints */
+    table {
+      width: 100% !important;
+      border-collapse: collapse !important;
+    }
+
+    th, td {
+      border-color: #64748b !important;
+      color: #0f172a !important;
+    }
+
     #lembar-rincian-cetak table,
     #lembar-rincian-cetak th,
     #lembar-rincian-cetak td {
-      border-color: #94a3b8 !important;
+      border-color: #64748b !important;
     }
 
     #lembar-rincian-cetak .bg-slate-100 {
@@ -103,7 +141,9 @@
     /* Page breaks */
     .page-break-inside-avoid,
     tr,
-    .card-print {
+    .card-print,
+    .signature-block,
+    .border-b-4 {
       page-break-inside: avoid !important;
       break-inside: avoid !important;
     }
@@ -111,7 +151,8 @@
     /* Custom A4 page margins */
     @page {
       size: A4 portrait;
-      margin: 10mm 15mm;
+      margin: 12mm 15mm;
     }
   }
 }
+
