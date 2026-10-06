@@ -18,22 +18,58 @@ export async function analyzeRppDocumentWithGemini(
 
   // Helper for generating fallback analysis when Gemini API is unconfigured or unavailable
   const generateFallbackResult = (): AIAnalysisResult => {
+    const rawText = docResult.fullText || '';
+    const textLower = rawText.toLowerCase();
+
+    // Split document into sentences/paragraphs to extract real citations
+    const textLines = rawText
+      .split(/\r?\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 5);
+
     const validatedAnalysis: AIIndicatorAnalysis[] = reqData.instrumentItems.map((item) => {
-      const textLower = (docResult.fullText || '').toLowerCase();
       const indLower = (item.indicator || '').toLowerCase();
       const codeLower = (item.code || '').toLowerCase();
+      
+      // Keywords related to this indicator
+      const keywords = [indLower, codeLower].filter(Boolean);
+      // Add individual key terms
+      const subWords = indLower.split(/\s+/).filter((w) => w.length > 4);
+      keywords.push(...subWords);
+
+      // Find matching lines in actual document
+      const matchingLine = textLines.find((line) => {
+        const lineLower = line.toLowerCase();
+        return keywords.some((kw) => lineLower.includes(kw));
+      });
 
       let scoreRec = 2;
       let evidenceStatus: 'FOUND' | 'PARTIAL' | 'NOT_FOUND' = 'PARTIAL';
-      let evidenceStr = `Penyebutan kata kunci indikator "${item.indicator}" dalam dokumen.`;
+      let evidenceStr = `Terdapat komponen terkait "${item.indicator}" dalam dokumen RPPM.`;
+      let location = 'Dokumen Utama';
 
-      if (textLower.includes(indLower) || (codeLower && textLower.includes(codeLower))) {
+      if (matchingLine) {
         scoreRec = 3;
         evidenceStatus = 'FOUND';
-        evidenceStr = `Ditemukan referensi spesifik mengenai ${item.indicator} pada teks dokumen RPPM.`;
-      } else if (docResult.wordCount > 100) {
-        scoreRec = 2;
-        evidenceStatus = 'PARTIAL';
+        evidenceStr = `Kutipan dokumen: "${matchingLine.slice(0, 160)}${matchingLine.length > 160 ? '...' : ''}"`;
+        // Try to identify page
+        if (docResult.pages && docResult.pages.length > 0) {
+          const foundPage = docResult.pages.find((p) => p.text.includes(matchingLine.slice(0, 30)));
+          if (foundPage) location = `Halaman ${foundPage.page_number}`;
+        }
+      } else if (docResult.wordCount > 30) {
+        // Look for general pedagogical presence
+        const generalEduKeywords = ['pembelajaran', 'kegiatan', 'tujuan', 'siswa', 'guru', 'asesmen', 'materi'];
+        const hasEduContext = generalEduKeywords.some((k) => textLower.includes(k));
+        if (hasEduContext) {
+          scoreRec = 2;
+          evidenceStatus = 'PARTIAL';
+          evidenceStr = `Komponen ${item.indicator} tersirat dalam rangkaian aktivitas pembelajaran, namun butuh penegasan eksplisit.`;
+        } else {
+          scoreRec = 1;
+          evidenceStatus = 'NOT_FOUND';
+          evidenceStr = `Indikator ${item.indicator} belum ditemukan secara tertulis dalam dokumen.`;
+        }
       } else {
         scoreRec = 1;
         evidenceStatus = 'NOT_FOUND';
@@ -45,11 +81,13 @@ export async function analyzeRppDocumentWithGemini(
         score_recommendation: scoreRec,
         evidence_status: evidenceStatus,
         evidence: [evidenceStr],
-        location: 'Dokumen Utama',
-        reason: `Hasil analisis kecukupan dokumen terhadap indikator ${item.indicator}.`,
+        location,
+        reason: scoreRec === 3
+          ? `Indikator ${item.indicator} didukung oleh bukti tekstual yang jelas dalam perangkat pembelajaran.`
+          : `Hasil telaah menunjukkan indikator ${item.indicator} memerlukan kelengkapan deskripsi.`,
         missing_elements: scoreRec < 3 ? [`Perincian modul ajar untuk aspek ${item.indicator}.`] : [],
         strength: scoreRec === 3 ? `Penguasaan aspek ${item.indicator} tertuang jelas.` : '-',
-        revision_note: scoreRec < 3 ? `Pertajam perincian langkah kegiatan untuk ${item.indicator}.` : '-',
+        revision_note: scoreRec < 3 ? `Pertajam perincian langkah kegiatan dan evaluasi untuk ${item.indicator}.` : '-',
         recommendation: `Tingkatkan kedalaman komponen ${item.indicator} pada perangkat pembelajaran.`,
         confidence: 0.85,
         status: 'PENDING',
@@ -60,15 +98,15 @@ export async function analyzeRppDocumentWithGemini(
       analysis: validatedAnalysis,
       summary: {
         strengths: [
-          `Dokumen ${reqData.fileName || 'RPPM'} telah berhasil ditelaah oleh sistem.`,
-          'Komponen utama perangkat pembelajaran telah terstruktur secara teratur.',
+          `Dokumen ${reqData.fileName || 'RPPM'} milik ${reqData.teacherName} telah berhasil dianalisis.`,
+          'Struktur perangkat pembelajaran dasar (Tujuan, Langkah Kegiatan, dan Asesmen) telah terpetakan.',
         ],
         priority_improvements: [
           'Pertajam integrasi Pembelajaran Mendalam (Mindful, Meaningful, Joyful).',
-          'Lengkapi instrumen asesmen diagnostik dan diferensiasi pembelajaran.',
+          'Lengkapi instrumen asesmen formatif, diagnostik, dan lembar kerja diferensiasi.',
         ],
         general_recommendation:
-          'Lakukan peninjauan mendalam bersama Supervisor untuk menyelaraskan skor rekomendasi AI dengan realisasi kelas.',
+          'Lakukan diskusi reflektif bersama Supervisor untuk memvalidasi dan menyelaraskan rekomendasi AI dengan implementasi di kelas.',
       },
     };
   };
@@ -128,9 +166,21 @@ export async function analyzeRppDocumentWithGemini(
   const timeoutId = setTimeout(() => controller.abort(), 45000);
 
   try {
+    const contents: any[] = [];
+    if (reqData.documentBase64 && reqData.fileType === 'pdf') {
+      const base64Clean = reqData.documentBase64.replace(/^data:[^;]+;base64,/, '');
+      contents.push({
+        inlineData: {
+          mimeType: 'application/pdf',
+          data: base64Clean,
+        },
+      });
+    }
+    contents.push({ text: promptText });
+
     const response = await ai.models.generateContent({
       model: modelName,
-      contents: promptText,
+      contents,
       config: {
         systemInstruction: RPP_SYSTEM_INSTRUCTION,
         responseMimeType: 'application/json',

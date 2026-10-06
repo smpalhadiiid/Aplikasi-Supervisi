@@ -73,7 +73,10 @@ export const TelaahRppm: React.FC = () => {
       setTeachers(db.getTeachers(role, currentTeacherProfile?.id));
 
       const insts = db.getInstruments();
-      const match = insts.find((i) => i.type === 'RPPM' && i.is_active !== false) || insts.find((i) => i.type === 'RPPM');
+      const match =
+        insts.find((i) => i.type === 'RPPM' && i.is_active !== false && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'RPPM' && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'RPPM');
       if (match) setActiveInst(match);
     };
 
@@ -85,8 +88,10 @@ export const TelaahRppm: React.FC = () => {
     let currentInst = activeInst;
     if (!currentInst || !currentInst.sections || currentInst.sections.length === 0) {
       const insts = db.getInstruments();
-      currentInst = insts.find((i) => i.type === 'RPPM' && i.is_active !== false && i.sections && i.sections.length > 0) || insts.find((i) => i.type === 'RPPM');
-      if (currentInst) setActiveInst(currentInst);
+      currentInst =
+        insts.find((i) => i.type === 'RPPM' && i.is_active !== false && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'RPPM' && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'RPPM');
     }
 
     if (!currentInst || !currentInst.sections || currentInst.sections.length === 0) {
@@ -94,6 +99,7 @@ export const TelaahRppm: React.FC = () => {
       return;
     }
 
+    setActiveInst(currentInst);
     setFormTeacherId(teachers[0]?.id || '');
     setSemester('Ganjil');
     setAcademicYear('2026/2027');
@@ -103,7 +109,7 @@ export const TelaahRppm: React.FC = () => {
 
     // Initialize item scores for manual backup mode
     const initialScores: Record<string, { score: number; notes: string }> = {};
-    activeInst.sections.forEach((sec) => {
+    currentInst.sections.forEach((sec) => {
       sec.items?.forEach((itm) => {
         initialScores[itm.id] = { score: 3, notes: '' };
       });

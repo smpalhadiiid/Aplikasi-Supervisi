@@ -1,6 +1,5 @@
 import mammoth from 'mammoth';
-import * as pdfParseModule from 'pdf-parse';
-const pdfParse: any = (pdfParseModule as any).default || pdfParseModule;
+import { PDFParse } from 'pdf-parse';
 
 export interface ExtractedPage {
   page_number: number;
@@ -76,22 +75,17 @@ export async function extractDocumentContent(
       const result = await mammoth.extractRawText({ buffer });
       const rawText = result.value.trim();
 
-      const paragraphs = rawText
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-
       const words = rawText.split(/\s+/).filter(Boolean);
       const wordCount = words.length;
 
-      if (wordCount < 20) {
+      if (wordCount < 10) {
         return {
           fullText: rawText,
           pages: [{ page_number: 1, text: rawText }],
           totalPages: 1,
           wordCount,
           isUnreadable: true,
-          unreadableReason: 'Dokumen DOCX berisi terlalu sedikit teks atau kosong (< 20 kata). Mohon periksa kembali dokumen Anda.',
+          unreadableReason: 'Dokumen DOCX berisi terlalu sedikit teks atau kosong (< 10 kata). Mohon periksa kembali dokumen Anda.',
           fileType,
         };
       }
@@ -108,49 +102,47 @@ export async function extractDocumentContent(
 
     if (fileType === 'pdf') {
       const pageTexts: ExtractedPage[] = [];
-      const pdfData = await pdfParse(buffer, {
-        pagerender: (pageData: any) => {
-          return pageData.getTextContent().then((textContent: any) => {
-            let lastY, text = '';
-            for (const item of textContent.items) {
-              if (lastY == item.transform[5] || !lastY) {
-                text += item.str;
-              } else {
-                text += '\n' + item.str;
-              }
-              lastY = item.transform[5];
-            }
-            pageTexts.push({
-              page_number: pageData.pageIndex + 1,
-              text: text.trim(),
-            });
-            return text;
-          });
-        },
-      });
+      let fullText = '';
+      let totalPages = 1;
 
-      const fullText = pdfData.text ? pdfData.text.trim() : '';
+      try {
+        const parser = new PDFParse({ data: buffer });
+        const textResult = await parser.getText();
+        await parser.destroy();
+
+        if (textResult) {
+          fullText = (textResult.text || '').trim();
+          totalPages = textResult.total || (Array.isArray(textResult.pages) ? textResult.pages.length : 1);
+          if (Array.isArray(textResult.pages) && textResult.pages.length > 0) {
+            textResult.pages.forEach((p: any, idx: number) => {
+              pageTexts.push({
+                page_number: p.num || idx + 1,
+                text: (p.text || '').trim(),
+              });
+            });
+          }
+        }
+      } catch (parseErr: any) {
+        console.warn('[PDFParse warning, will rely on visual AI analysis]:', parseErr?.message || parseErr);
+      }
+
+      // Bersihkan pemisah halaman bawaan pdf-parse jika ada
+      fullText = fullText.replace(/-- \d+ of \d+ --/g, '').trim();
+
       const words = fullText.split(/\s+/).filter(Boolean);
       const wordCount = words.length;
 
-      if (wordCount < 20) {
-        return {
-          fullText,
-          pages: pageTexts.length > 0 ? pageTexts : [{ page_number: 1, text: fullText }],
-          totalPages: pdfData.numpages || 1,
-          wordCount,
-          isUnreadable: true,
-          unreadableReason: 'Dokumen PDF tidak terbaca atau berupa hasil pemindaian (scan) tanpa teks terproses (OCR). Minimum 20 kata diperlukan.',
-          fileType,
-        };
-      }
+      // Jika teks sangat sedikit (misalnya PDF scan), tandai tetapi jangan gagalkan
+      // agar multimodal Gemini dapat memproses visual PDF langsung
+      const isUnreadable = wordCount === 0 && fullText.length === 0;
 
       return {
-        fullText,
+        fullText: fullText || '(Dokumen PDF berbasis visual/tata-letak kompleks. Teks dianalisis langsung oleh AI)',
         pages: pageTexts.length > 0 ? pageTexts : [{ page_number: 1, text: fullText }],
-        totalPages: pdfData.numpages || 1,
-        wordCount,
-        isUnreadable: false,
+        totalPages: totalPages || 1,
+        wordCount: wordCount || 1,
+        isUnreadable,
+        unreadableReason: isUnreadable ? 'Dokumen PDF kosong atau tidak berisi konten yang dapat dibaca.' : undefined,
         fileType,
       };
     }
@@ -160,14 +152,14 @@ export async function extractDocumentContent(
     const words = textContent.split(/\s+/).filter(Boolean);
     const wordCount = words.length;
 
-    if (wordCount < 20) {
+    if (wordCount < 10) {
       return {
         fullText: textContent,
         pages: [{ page_number: 1, text: textContent }],
         totalPages: 1,
         wordCount,
         isUnreadable: true,
-        unreadableReason: 'Teks dokumen terlalu pendek (< 20 kata).',
+        unreadableReason: 'Teks dokumen terlalu pendek (< 10 kata).',
         fileType: 'txt',
       };
     }
@@ -181,6 +173,7 @@ export async function extractDocumentContent(
       fileType: 'txt',
     };
   } catch (err: any) {
+    console.error('[Document Extraction Error]:', err);
     return {
       fullText: '',
       pages: [],

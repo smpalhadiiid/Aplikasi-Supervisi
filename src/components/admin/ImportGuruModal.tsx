@@ -303,7 +303,17 @@ export const ImportGuruModal: React.FC<ImportGuruModalProps> = ({
       onSuccess();
       onClose();
     } catch (err: any) {
-      showToast('Gagal Import', err?.message || 'Terjadi kesalahan saat menyimpan data.', 'error');
+      const msg = err?.message || 'Terjadi kesalahan saat menyimpan data.';
+      if (msg.includes('RLS') || msg.includes('Row-Level Security') || msg.includes('disimpan sementara')) {
+        showToast('Penyimpanan Lokal Aktif', msg, 'warning');
+        setParsedRows([]);
+        setPasteText('');
+        setSelectedFileName('');
+        onSuccess();
+        onClose();
+      } else {
+        showToast('Gagal Import', msg, 'error');
+      }
     } finally {
       setIsProcessing(false);
     }

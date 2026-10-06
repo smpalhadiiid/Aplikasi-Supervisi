@@ -79,8 +79,11 @@ export function buildDocumentStoragePath(
   teacherId: string,
   originalFilename: string
 ): string {
-  const safeSchoolId = (schoolId || 'sch-default').replace(/[^a-zA-Z0-9_-]/g, '');
-  const safeTeacherId = (teacherId || 't-default').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!schoolId || !teacherId) {
+    throw new Error('schoolId dan teacherId wajib disertakan untuk alokasi dokumen.');
+  }
+  const safeSchoolId = schoolId.replace(/[^a-zA-Z0-9_-]/g, '');
+  const safeTeacherId = teacherId.replace(/[^a-zA-Z0-9_-]/g, '');
 
   const ext = originalFilename.split('.').pop()?.toLowerCase() || 'pdf';
   const rawBase = originalFilename.replace(/\.[^/.]+$/, '');

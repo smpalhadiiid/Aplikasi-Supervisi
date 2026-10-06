@@ -1,5 +1,8 @@
 import { Router, Response } from 'express';
-import { authenticateToken, authorizeRoles, AuthenticatedRequest } from '../middleware/auth';
+import fs from 'fs';
+import path from 'path';
+import { createClient } from '@supabase/supabase-js';
+import { authenticateToken, authorizeRoles, AuthenticatedRequest, setSupabaseServerClient } from '../middleware/auth';
 import { aiRateLimiter } from '../middleware/rateLimiter';
 import { AnalyzeRppRequestSchema, AnalyzeGeneralRequestSchema } from '../validators/aiSchemas';
 import { extractDocumentContent } from '../services/documentExtractor';
@@ -16,7 +19,7 @@ const router = Router();
 router.post(
   '/ai-analyze-rpp-document',
   authenticateToken,
-  authorizeRoles('ADMIN', 'SUPERVISOR'),
+  authorizeRoles('ADMIN', 'SUPERVISOR', 'GURU'),
   aiRateLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -53,16 +56,16 @@ router.post(
       // Extract document content securely
       const docExtraction = await extractDocumentContent(docBuffer, fileType);
 
-      // FASE 7: Jika file tidak terbaca (unreadable/terlalu pendek/hasil scan gambar),
-      // JANGAN memberikan analisis seolah-olah valid atau score AI berdasarkan placeholder!
-      if (docExtraction.isUnreadable) {
+      // Jika file benar-benar rusak/kosong dan tidak ada visual base64 PDF
+      const canGeminiProcessMultimodal = Boolean(reqData.documentBase64 && fileType === 'pdf');
+      if (docExtraction.isUnreadable && !canGeminiProcessMultimodal) {
         return res.status(200).json({
           success: false,
           error: 'UNREADABLE_DOCUMENT',
           isUnreadable: true,
           message:
             docExtraction.unreadableReason ||
-            'Dokumen tidak memenuhi kriteria kelayakan pemrosesan teks (teks terlalu singkat atau dokumen merupakan hasil scan tanpa OCR).',
+            'Dokumen tidak memenuhi kriteria kelayakan pemrosesan teks (teks terlalu singkat atau dokumen rusak).',
           documentMeta: {
             wordCount: docExtraction.wordCount,
             totalPages: docExtraction.totalPages,
@@ -84,6 +87,7 @@ router.post(
           totalPages: docExtraction.totalPages,
           isUnreadable: false,
           unreadableReason: null,
+          extractedTextPreview: docExtraction.fullText ? docExtraction.fullText.slice(0, 1000) : '',
         },
       });
     } catch (err: any) {
@@ -101,7 +105,7 @@ router.post(
 router.post(
   '/ai-analyze',
   authenticateToken,
-  authorizeRoles('ADMIN', 'SUPERVISOR'),
+  authorizeRoles('ADMIN', 'SUPERVISOR', 'GURU'),
   aiRateLimiter,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -147,9 +151,20 @@ router.post(
         });
       }
 
+      if (!req.user || !req.user.school_id) {
+        return res.status(401).json({
+          success: false,
+          error: 'UNAUTHORIZED',
+          message: 'Sesi pengguna tidak valid.',
+        });
+      }
+
       // Validasi hak kepemilikan guru (Guru hanya boleh upload untuk dirinya sendiri)
-      let resolvedTeacherId = teacherId || req.user?.teacher_id || req.user?.id || 't-default';
-      if (req.user?.role === 'GURU') {
+      let resolvedTeacherId = req.user.role === 'GURU'
+        ? (req.user.teacher_id || req.user.id)
+        : (teacherId || req.user.teacher_id || req.user.id);
+
+      if (req.user.role === 'GURU') {
         if (req.user.teacher_id && resolvedTeacherId !== req.user.teacher_id && resolvedTeacherId !== req.user.id) {
           return res.status(403).json({
             success: false,
@@ -171,7 +186,8 @@ router.post(
         });
       }
 
-      const schoolId = req.user?.school_id || 'sch-default';
+      // school_id strictly from authenticated database user profile
+      const schoolId = req.user.school_id;
       const uploadResult = await uploadPrivateDocument(
         schoolId,
         resolvedTeacherId,
@@ -276,6 +292,60 @@ router.post(
     }
   }
 );
+
+// Endpoint 5: Update Supabase Configuration dynamically
+router.post('/supabase-config', async (req, res) => {
+  try {
+    const { supabaseUrl, supabaseAnonKey } = req.body;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return res.status(400).json({ success: false, message: 'URL dan Anon Key wajib diisi.' });
+    }
+
+    const cleanUrl = String(supabaseUrl).trim();
+    const cleanKey = String(supabaseAnonKey).trim();
+
+    // Update runtime server client
+    const newServerClient = createClient(cleanUrl, cleanKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    setSupabaseServerClient(newServerClient);
+
+    // Save to .env so it persists across server restarts
+    try {
+      const envPath = path.resolve(process.cwd(), '.env');
+      let envContent = '';
+      if (fs.existsSync(envPath)) {
+        envContent = fs.readFileSync(envPath, 'utf-8');
+      } else {
+        const examplePath = path.resolve(process.cwd(), '.env.example');
+        if (fs.existsSync(examplePath)) {
+          envContent = fs.readFileSync(examplePath, 'utf-8');
+        }
+      }
+
+      if (envContent.includes('VITE_SUPABASE_URL=')) {
+        envContent = envContent.replace(/VITE_SUPABASE_URL=.*/, `VITE_SUPABASE_URL=${cleanUrl}`);
+      } else {
+        envContent += `\nVITE_SUPABASE_URL=${cleanUrl}`;
+      }
+
+      if (envContent.includes('VITE_SUPABASE_ANON_KEY=')) {
+        envContent = envContent.replace(/VITE_SUPABASE_ANON_KEY=.*/, `VITE_SUPABASE_ANON_KEY=${cleanKey}`);
+      } else {
+        envContent += `\nVITE_SUPABASE_ANON_KEY=${cleanKey}`;
+      }
+
+      fs.writeFileSync(envPath, envContent.trim() + '\n', 'utf-8');
+      console.log('[Server] File .env berhasil diperbarui dengan kredensial Supabase baru.');
+    } catch (fsErr) {
+      console.warn('[Server] Gagal menulis ke .env:', fsErr);
+    }
+
+    return res.json({ success: true, message: 'Konfigurasi Supabase berhasil diperbarui pada server.' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Gagal menyimpan konfigurasi.' });
+  }
+});
 
 export default router;
 

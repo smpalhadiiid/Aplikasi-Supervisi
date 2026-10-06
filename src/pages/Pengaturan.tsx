@@ -1,8 +1,17 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/db';
-import { SUPABASE_SQL_SCHEMA } from '../lib/sqlSchema';
-import { isSupabaseConfigured, SUPABASE_URL, testSupabaseConnection } from '../lib/supabaseClient';
+import { SUPABASE_SQL_SCHEMA, getActivationSql } from '../lib/sqlSchema';
+import {
+  isSupabaseConfigured,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  updateSupabaseConfig,
+  testSupabaseConnection,
+  checkDatabaseHealth,
+  TestConnectionResult,
+  DatabaseHealthCheckResult,
+} from '../lib/supabaseClient';
 import { Card } from '../components/common/Card';
 import { useToast } from '../components/common/Toast';
 import { AdminSupervisorProfileManager } from '../components/admin/AdminSupervisorProfileManager';
@@ -17,10 +26,15 @@ import {
   ShieldCheck,
   Code2,
   Trash2,
+  ExternalLink,
+  Save,
+  Key,
+  Globe,
+  HelpCircle,
 } from 'lucide-react';
 
 export const Pengaturan: React.FC = () => {
-  const { currentSchool } = useAuth();
+  const { currentSchool, currentUser } = useAuth();
   const { showToast } = useToast();
 
   const [schoolForm, setSchoolForm] = useState({
@@ -30,39 +44,80 @@ export const Pengaturan: React.FC = () => {
     headmaster_name: currentSchool?.headmaster_name || '',
   });
 
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState(SUPABASE_URL || '');
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState(SUPABASE_ANON_KEY || '');
+  const [isSavingSupabase, setIsSavingSupabase] = useState(false);
+
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedActivationSql, setCopiedActivationSql] = useState(false);
   const [testingConn, setTestingConn] = useState(false);
   const [syncingData, setSyncingData] = useState(false);
-  const [connMessage, setConnMessage] = useState<{ success: boolean; message: string } | null>(null);
+  const [connMessage, setConnMessage] = useState<TestConnectionResult | null>(null);
+  const [healthResult, setHealthResult] = useState<DatabaseHealthCheckResult | null>(null);
 
   const handleTestConnection = async () => {
     setTestingConn(true);
     setConnMessage(null);
+    setHealthResult(null);
     const res = await testSupabaseConnection();
+    const health = await checkDatabaseHealth();
     setTestingConn(false);
     setConnMessage(res);
-    if (res.success) {
+    setHealthResult(health);
+    if (res.success && health.healthy) {
       showToast('Koneksi Sukses', res.message, 'success');
     } else {
       showToast('Perhatian Supabase', res.message, 'error');
     }
   };
 
-  const handleSyncDataToSupabase = async () => {
-    setSyncingData(true);
-    const res = await db.pushLocalDataToSupabase();
-    setSyncingData(false);
-    if (res.success) {
-      showToast('Sinkronisasi Sukses', res.message, 'success');
-    } else {
-      showToast('Sinkronisasi Gagal', res.message, 'error');
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabaseUrlInput.trim() || !supabaseKeyInput.trim()) {
+      showToast('Input Belum Lengkap', 'Project URL dan Anon Key wajib diisi.', 'error');
+      return;
+    }
+
+    setIsSavingSupabase(true);
+    try {
+      const res = await updateSupabaseConfig(supabaseUrlInput.trim(), supabaseKeyInput.trim());
+      if (res.success) {
+        showToast('Koneksi Disimpan', res.message, 'success');
+        // Langsung uji konektivitas
+        await handleTestConnection();
+        try {
+          await db.refreshFromSupabase();
+        } catch {}
+      } else {
+        showToast('Gagal Menghubungkan', res.message, 'error');
+      }
+    } catch (err: any) {
+      showToast('Gagal Konfigurasi', err?.message || 'Gagal menyimpan kredensial Supabase.', 'error');
+    } finally {
+      setIsSavingSupabase(false);
     }
   };
 
-  const handleUpdateSchool = (e: React.FormEvent) => {
+  const handleRefreshSupabase = async () => {
+    setSyncingData(true);
+    try {
+      await db.refreshFromSupabase();
+      showToast('Sinkronisasi Sukses', 'Data berhasil disinkronkan langsung dari Supabase.', 'success');
+    } catch (err: any) {
+      showToast('Sinkronisasi Gagal', err.message || 'Gagal memuat data dari Supabase.', 'error');
+    } finally {
+      setSyncingData(false);
+    }
+  };
+
+  const handleUpdateSchool = async (e: React.FormEvent) => {
     e.preventDefault();
-    db.updateSchool(schoolForm);
-    showToast('Berhasil', 'Informasi profil sekolah telah disimpan.', 'success');
+    try {
+      await db.updateSchool(schoolForm);
+      showToast('Berhasil', 'Informasi profil sekolah telah disimpan ke Supabase.', 'success');
+    } catch (err: any) {
+      showToast('Gagal Menyimpan', err.message || 'Gagal menyimpan profil sekolah.', 'error');
+    }
   };
 
   const handleCopySql = () => {
@@ -70,6 +125,15 @@ export const Pengaturan: React.FC = () => {
     setCopiedSql(true);
     showToast('Disalin', 'Skema Database & RLS disalin ke clipboard.', 'success');
     setTimeout(() => setCopiedSql(false), 3000);
+  };
+
+  const handleCopyActivationSql = () => {
+    const email = currentUser?.email || 'smpalhadiid@gmail.com';
+    const sql = getActivationSql(email);
+    navigator.clipboard.writeText(sql);
+    setCopiedActivationSql(true);
+    showToast('Disalin', 'Script Perbaikan RLS & Aktivasi Guru disalin ke clipboard.', 'success');
+    setTimeout(() => setCopiedActivationSql(false), 3000);
   };
 
   const handleResetData = () => {
@@ -167,12 +231,12 @@ export const Pengaturan: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={handleSyncDataToSupabase}
+                onClick={handleRefreshSupabase}
                 disabled={syncingData}
                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 shadow-xs cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${syncingData ? 'animate-spin' : ''}`} />
-                <span>{syncingData ? 'Menyingkronkan...' : 'Sinkronkan Data Ke Supabase'}</span>
+                <span>{syncingData ? 'Menyingkronkan...' : 'Sinkronkan Data Dari Supabase'}</span>
               </button>
               <button
                 type="button"
@@ -182,6 +246,15 @@ export const Pengaturan: React.FC = () => {
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${testingConn ? 'animate-spin' : ''}`} />
                 <span>{testingConn ? 'Menguji...' : 'Uji Koneksi DB'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyActivationSql}
+                className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="Salin SQL aktivasi untuk mengatasi error RLS dan menautkan profil admin/guru"
+              >
+                {copiedActivationSql ? <Check className="w-4 h-4 text-white" /> : <ShieldCheck className="w-4 h-4 text-white" />}
+                <span>{copiedActivationSql ? 'Tersalin' : 'Perbaikan RLS & Aktivasi'}</span>
               </button>
               <button
                 type="button"
@@ -195,17 +268,110 @@ export const Pengaturan: React.FC = () => {
           }
         >
           <div className="space-y-4">
+            {/* Form Input Kredensial Supabase Baru / Ubah Koneksi */}
+            <form onSubmit={handleSaveSupabaseConfig} className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-bold text-slate-800">Hubungkan Database Supabase PostgreSQL</span>
+                </div>
+                <a
+                  href="https://supabase.com/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 transition-colors"
+                >
+                  <span>Buka Supabase Console</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+
+              {/* 4 Panduan Langkah Singkat */}
+              <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-[11px] text-indigo-950 space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-indigo-900">
+                  <HelpCircle className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Panduan Menghubungkan Supabase:</span>
+                </div>
+                <ol className="list-decimal list-inside space-y-1 text-indigo-900/90 leading-relaxed text-[10.5px]">
+                  <li>Buka proyek Anda di <strong>supabase.com</strong>, pilih menu <strong>SQL Editor</strong>.</li>
+                  <li>Klik tombol <strong>Salin SQL Schema</strong> di atas, tempel di SQL Editor, lalu klik <strong>Run</strong> untuk membuat seluruh tabel.</li>
+                  <li>Buka menu <strong>Project Settings &gt; API</strong>, lalu salin <strong>Project URL</strong> dan <strong>anon public API Key</strong>.</li>
+                  <li>Tempelkan ke formulir di bawah ini dan klik <strong>Simpan & Hubungkan Database</strong>.</li>
+                </ol>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Supabase Project URL (API Endpoint)
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Globe className="w-3.5 h-3.5" />
+                    </div>
+                    <input
+                      type="url"
+                      required
+                      placeholder="https://xxxxxxxxxxxxxxxxxxxx.supabase.co"
+                      value={supabaseUrlInput}
+                      onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Public Anon API Key
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Key className="w-3.5 h-3.5" />
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      value={supabaseKeyInput}
+                      onChange={(e) => setSupabaseKeyInput(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
+                <span className="text-[10px] text-slate-500">
+                  Tersimpan di browser lokal dan sinkron ke server.
+                </span>
+                <button
+                  type="submit"
+                  disabled={isSavingSupabase}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Save className={`w-3.5 h-3.5 ${isSavingSupabase ? 'animate-spin' : ''}`} />
+                  <span>{isSavingSupabase ? 'Menyimpan & Menghubungkan...' : 'Simpan & Hubungkan Database'}</span>
+                </button>
+              </div>
+            </form>
+
             {/* Supabase Connection Status Banner */}
             <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white space-y-3 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
                 <div className="flex items-center gap-2.5">
                   <span className="relative flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                    <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isSupabaseConfigured ? 'bg-emerald-400' : 'bg-amber-400'} opacity-75`}></span>
+                    <span className={`relative inline-flex rounded-full h-3 w-3 ${isSupabaseConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
                   </span>
                   <div>
-                    <span className="font-extrabold text-emerald-400 text-sm block">Status Database: Terkoneksi & Dinamis</span>
-                    <span className="text-[10px] text-slate-400">Sinkronisasi Realtime Lintas Perangkat (Multi-Device Active)</span>
+                    <span className={`font-extrabold text-sm block ${isSupabaseConfigured ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      Status Database: {isSupabaseConfigured ? 'Terkonfigurasi (Env Active)' : 'Belum Dikonfigurasi'}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {isSupabaseConfigured
+                        ? 'Supabase PostgreSQL Single Source of Truth'
+                        : 'Variabel lingkungan VITE_SUPABASE_URL atau VITE_SUPABASE_ANON_KEY belum tersedia'}
+                    </span>
                   </div>
                 </div>
                 <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-800 px-2.5 py-1 rounded-lg">
@@ -221,6 +387,10 @@ export const Pengaturan: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
+                        if (!SUPABASE_URL) {
+                          showToast('Peringatan', 'Project URL belum dikonfigurasi.', 'error');
+                          return;
+                        }
                         navigator.clipboard.writeText(SUPABASE_URL);
                         showToast('Tersalin', 'Project URL berhasil disalin.', 'success');
                       }}
@@ -229,7 +399,9 @@ export const Pengaturan: React.FC = () => {
                       <Copy className="w-3 h-3" /> Salin
                     </button>
                   </div>
-                  <p className="text-[11px] font-mono text-emerald-300 truncate">{SUPABASE_URL}</p>
+                  <p className="text-[11px] font-mono text-emerald-300 truncate">
+                    {SUPABASE_URL || '(Belum dikonfigurasi)'}
+                  </p>
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1">
@@ -238,7 +410,11 @@ export const Pengaturan: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        navigator.clipboard.writeText('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJia3JiemZwc3Zsa2xkaXdtcHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMTA0MTgsImV4cCI6MjEwNDU4NjQxOH0.ouYlB25AsqVIx1SJfZuf3rIHNAYVbicgtUernkFzDgM');
+                        if (!SUPABASE_ANON_KEY) {
+                          showToast('Peringatan', 'Anon Key belum dikonfigurasi.', 'error');
+                          return;
+                        }
+                        navigator.clipboard.writeText(SUPABASE_ANON_KEY);
                         showToast('Tersalin', 'Anon Key berhasil disalin.', 'success');
                       }}
                       className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
@@ -247,7 +423,7 @@ export const Pengaturan: React.FC = () => {
                     </button>
                   </div>
                   <p className="text-[11px] font-mono text-slate-400 truncate">
-                    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3Mi...
+                    {SUPABASE_ANON_KEY ? `${SUPABASE_ANON_KEY.substring(0, 32)}...` : '(Belum dikonfigurasi)'}
                   </p>
                 </div>
               </div>
@@ -264,9 +440,43 @@ export const Pengaturan: React.FC = () => {
                     ) : (
                       <Code2 className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                     )}
-                    <div>
-                      <p className="font-bold mb-0.5">{connMessage.success ? 'Koneksi Berhasil' : 'Pemberitahuan Database Supabase'}</p>
+                    <div className="space-y-1 flex-1">
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold">
+                          {connMessage.success ? 'Koneksi Berhasil' : 'Pemberitahuan Database Supabase'}
+                        </p>
+                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/40 border border-white/10">
+                          {connMessage.category}
+                        </span>
+                      </div>
                       <p className="text-[11px] opacity-90">{connMessage.message}</p>
+
+                      {/* Tabel Verifikasi Health Check */}
+                      {healthResult && (
+                        <div className="pt-2 mt-2 border-t border-white/10 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {(['schools', 'users', 'teachers'] as const).map((tName) => {
+                            const tInfo = healthResult.tables[tName];
+                            return (
+                              <div
+                                key={tName}
+                                className={`p-2 rounded border text-[11px] font-mono ${
+                                  tInfo?.healthy
+                                    ? 'bg-emerald-900/40 border-emerald-700/60 text-emerald-300'
+                                    : 'bg-rose-900/40 border-rose-700/60 text-rose-300'
+                                }`}
+                              >
+                                <div className="font-bold flex items-center justify-between">
+                                  <span>{tName}</span>
+                                  <span>{tInfo?.healthy ? '✓ OK' : '✕ FAIL'}</span>
+                                </div>
+                                <div className="text-[10px] opacity-80 mt-0.5 truncate">
+                                  {tInfo?.category}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

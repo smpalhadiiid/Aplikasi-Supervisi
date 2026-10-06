@@ -189,28 +189,33 @@ export const Instrumen: React.FC = () => {
   };
 
   // Save new Version of Instrument
-  const handleCreateVersion = (e: React.FormEvent) => {
+  const handleCreateVersion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInst) return;
 
-    const newInst = db.addInstrument({
-      type: selectedInst.type,
-      title: versionForm.title || selectedInst.title,
-      description: versionForm.description || selectedInst.description,
-      version: versionForm.version,
-      is_active: true,
-      sections: selectedInst.sections, // Duplicate existing sections
-      school_id: db.getSchool().id,
-    });
+    try {
+      const newInst = await db.addInstrument({
+        type: selectedInst.type,
+        title: versionForm.title || selectedInst.title,
+        description: versionForm.description || selectedInst.description,
+        version: versionForm.version,
+        is_active: true,
+        sections: selectedInst.sections, // Duplicate existing sections
+        school_id: db.getSchool().id,
+      });
 
-    // Deactivate previous versions
-    instruments
-      .filter((i) => i.type === selectedInst.type && i.id !== newInst.id)
-      .forEach((i) => db.updateInstrument(i.id, { is_active: false }));
+      // Deactivate previous versions
+      const prevVersions = instruments.filter((i) => i.type === selectedInst.type && i.id !== newInst.id);
+      for (const i of prevVersions) {
+        await db.updateInstrument(i.id, { is_active: false });
+      }
 
-    setSelectedInst(newInst);
-    showToast('Versi Baru Dibuat', `Instrumen ${versionForm.version} berhasil dibuat.`, 'success');
-    setIsVersionModalOpen(false);
+      setSelectedInst(newInst);
+      showToast('Versi Baru Dibuat', `Instrumen ${versionForm.version} berhasil dibuat.`, 'success');
+      setIsVersionModalOpen(false);
+    } catch (err: any) {
+      showToast('Gagal Membuat Versi', err.message || 'Terjadi kesalahan.', 'error');
+    }
   };
 
   // Import Excel Handler
@@ -245,7 +250,7 @@ export const Instrumen: React.FC = () => {
       }));
 
       // Update instrument
-      db.updateInstrument(selectedInst.id, { sections: newSections });
+      await db.updateInstrument(selectedInst.id, { sections: newSections });
       showToast('Import Berhasil', `${parsedSections.length} bagian & indikator di-import dari Excel.`, 'success');
       setIsImportModalOpen(false);
       setImportFile(null);

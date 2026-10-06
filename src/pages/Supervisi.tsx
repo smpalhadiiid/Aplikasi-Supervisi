@@ -92,7 +92,10 @@ export const Supervisi: React.FC = () => {
       setTeachers(db.getTeachers(role, currentTeacherProfile?.id));
 
       const insts = db.getInstruments();
-      const match = insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.is_active !== false) || insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN');
+      const match =
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.is_active !== false && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN');
       if (match) setActiveInst(match);
     };
 
@@ -104,8 +107,10 @@ export const Supervisi: React.FC = () => {
     let currentInst = activeInst;
     if (!currentInst || !currentInst.sections || currentInst.sections.length === 0) {
       const insts = db.getInstruments();
-      currentInst = insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.is_active !== false && i.sections && i.sections.length > 0) || insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN');
-      if (currentInst) setActiveInst(currentInst);
+      currentInst =
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.is_active !== false && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN' && i.sections && i.sections.length > 0) ||
+        insts.find((i) => i.type === 'SUPERVISI_PEMBELAJARAN');
     }
 
     if (!currentInst || !currentInst.sections || currentInst.sections.length === 0) {
@@ -113,6 +118,7 @@ export const Supervisi: React.FC = () => {
       return;
     }
 
+    setActiveInst(currentInst);
     setFormTeacherId(teachers[0]?.id || '');
     setSemester('Ganjil');
     setAcademicYear('2026/2027');
@@ -121,7 +127,7 @@ export const Supervisi: React.FC = () => {
     setPhotos([]);
 
     const initialScores: Record<string, { score: number; notes: string }> = {};
-    activeInst.sections.forEach((sec) => {
+    currentInst.sections.forEach((sec) => {
       sec.items?.forEach((itm) => {
         initialScores[itm.id] = { score: 3, notes: '' };
       });

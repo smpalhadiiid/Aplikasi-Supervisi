@@ -92,10 +92,14 @@ export const Guru: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     if (confirm(`Apakah Anda yakin ingin menghapus data guru ${name}?`)) {
-      db.deleteTeacher(id);
-      showToast('Berhasil', `Data guru ${name} telah dihapus.`, 'success');
+      try {
+        await db.deleteTeacher(id);
+        showToast('Berhasil', `Data guru ${name} telah dihapus dari Supabase.`, 'success');
+      } catch (err: any) {
+        showToast('Gagal Menghapus', err.message || 'Gagal menghapus data guru dari Supabase.', 'error');
+      }
     }
   };
 
@@ -111,12 +115,12 @@ export const Guru: React.FC = () => {
 
     try {
       if (editingTeacher) {
-        db.updateTeacher(editingTeacher.id, {
+        await db.updateTeacher(editingTeacher.id, {
           ...formData,
           username,
           password,
         });
-        showToast('Berhasil', 'Data dan akun login guru diperbarui.', 'success');
+        showToast('Berhasil', 'Data dan akun login guru berhasil diperbarui di Supabase.', 'success');
       } else {
         const existingNip = teachers.find((t) => t.nip && t.nip.trim() === formData.nip.trim());
         if (existingNip) {
@@ -135,12 +139,18 @@ export const Guru: React.FC = () => {
           username,
           password,
         });
-        showToast('Berhasil', 'Guru baru dan akun login berhasil dibuat.', 'success');
+        showToast('Berhasil', 'Guru baru dan akun login berhasil disimpan ke Supabase.', 'success');
       }
 
       setIsModalOpen(false);
     } catch (err: any) {
-      showToast('Gagal', err?.message || 'Data guru gagal disimpan ke Supabase.', 'error');
+      const msg = err?.message || 'Data guru gagal disimpan ke Supabase.';
+      if (msg.includes('RLS') || msg.includes('Row-Level Security') || msg.includes('disimpan sementara')) {
+        showToast('Penyimpanan Lokal Aktif', msg, 'warning');
+        setIsModalOpen(false);
+      } else {
+        showToast('Gagal Menyimpan', msg, 'error');
+      }
     }
   };
 

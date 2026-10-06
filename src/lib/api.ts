@@ -15,23 +15,12 @@ export async function getAuthToken(): Promise<string | null> {
 
 /**
  * Returns Authorization header with Supabase Bearer token if session exists.
- * If token is available in local storage or session, it provides standard headers.
+ * Uses official Supabase client session management.
  */
-export function getAuthHeader(): Record<string, string> {
-  if (!supabase) return {};
-  try {
-    // Attempt to inspect active session from client storage
-    const storageKey = `sb-${new URL(supabase['supabaseUrl'] || 'https://default.supabase.co').hostname.split('.')[0]}-auth-token`;
-    const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      const token = parsed?.access_token || parsed?.currentSession?.access_token;
-      if (token) {
-        return { Authorization: `Bearer ${token}` };
-      }
-    }
-  } catch {
-    // ignore parse error
+export async function getAuthHeader(): Promise<Record<string, string>> {
+  const token = await getAuthToken();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
   }
   return {};
 }

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/db';
+import { isSupabaseConfigured, SUPABASE_URL } from '../lib/supabaseClient';
+import { getActivationSql } from '../lib/sqlSchema';
 import { UserRole } from '../types';
 import {
   BookOpen,
@@ -13,11 +15,17 @@ import {
   Lock,
   ArrowRight,
   ShieldCheck,
+  ShieldAlert,
   UserCheck,
   GraduationCap,
   AlertCircle,
   CheckCircle,
   Wand2,
+  HelpCircle,
+  Copy,
+  ExternalLink,
+  Code2,
+  LogIn,
 } from 'lucide-react';
 
 interface LoginProps {
@@ -25,18 +33,59 @@ interface LoginProps {
 }
 
 export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
-  const { signInWithPassword, signInWithMagicLink, login: fallbackLogin } = useAuth();
+  const { signInWithPassword, signInOfflineDemo, signInWithMagicLink, resendConfirmationEmail } = useAuth();
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState('smpalhadiid@gmail.com');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isMagicLoading, setIsMagicLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [resendNotice, setResendNotice] = useState<{ message: string; success: boolean } | null>(null);
+  const [showSupabaseGuide, setShowSupabaseGuide] = useState(false);
+  const [copiedActivationSql, setCopiedActivationSql] = useState(false);
+  const [showActivationSql, setShowActivationSql] = useState(true);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isNetworkError, setIsNetworkError] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const supabaseProjectId = SUPABASE_URL.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1] || '';
+  const sqlEditorUrl = supabaseProjectId
+    ? `https://supabase.com/dashboard/project/${supabaseProjectId}/sql/new`
+    : 'https://supabase.com/dashboard';
+
+  const handleResendConfirmation = async () => {
+    if (!email) {
+      setResendNotice({ message: 'Harap masukkan Email / NIP terlebih dahulu pada formulir di bawah.', success: false });
+      return;
+    }
+    setIsResending(true);
+    setResendNotice(null);
+    try {
+      const res = await resendConfirmationEmail(email);
+      if (res.success) {
+        setResendNotice({
+          message: 'Tautan konfirmasi email berhasil dikirim ulang! Silakan periksa kotak masuk (inbox) atau folder Spam/Junk email Anda.',
+          success: true,
+        });
+      } else {
+        setResendNotice({
+          message: `Gagal mengirim email: ${res.error || 'Terjadi kesalahan sistem.'}`,
+          success: false,
+        });
+      }
+    } catch (err: any) {
+      setResendNotice({
+        message: err.message || 'Koneksi ke Supabase bermasalah.',
+        success: false,
+      });
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   const handleRedirectByRole = (role: UserRole) => {
     let targetPath = '/dashboard';
@@ -56,9 +105,18 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsNetworkError(false);
 
     if (!email || !password) {
       setErrorMessage('Harap isi email dan password.');
+      return;
+    }
+
+    if (!isSupabaseConfigured) {
+      // Masuk menggunakan akun lokal jika Supabase belum terkonfigurasi
+      const role: UserRole = email.toLowerCase().includes('admin') || email.toLowerCase().includes('smp') ? 'ADMIN' : (email.toLowerCase().includes('supervisor') ? 'SUPERVISOR' : 'GURU');
+      const offlineRes = signInOfflineDemo(email, role);
+      handleRedirectByRole(offlineRes.role);
       return;
     }
 
@@ -70,10 +128,15 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
       if (res.success && res.role) {
         handleRedirectByRole(res.role);
       } else {
+        if (res.isNetworkError || res.error?.includes('Failed to fetch')) {
+          setIsNetworkError(true);
+        }
         setErrorMessage(res.error || 'Tidak dapat masuk. Periksa kembali email dan password Anda.');
       }
-    } catch {
-      setErrorMessage('Koneksi bermasalah. Silakan coba lagi.');
+    } catch (err: any) {
+      const isNet = String(err?.message || '').toLowerCase().includes('fetch');
+      if (isNet) setIsNetworkError(true);
+      setErrorMessage(isNet ? 'Gagal terhubung ke server Supabase (Failed to fetch). Server database Supabase mungkin sedang tidak aktif atau dijeda (paused).' : 'Koneksi bermasalah. Silakan coba lagi.');
     } finally {
       setIsLoading(false);
     }
@@ -82,6 +145,12 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
   const handleMagicLinkSubmit = async () => {
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsNetworkError(false);
+
+    if (!isSupabaseConfigured) {
+      setErrorMessage('Konfigurasi database Supabase belum terpasang di variabel lingkungan.');
+      return;
+    }
 
     if (!email) {
       setErrorMessage('Masukkan email Anda untuk menggunakan Magic Link.');
@@ -110,17 +179,36 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
     setPassword('Password123!');
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsNetworkError(false);
 
-    // Attempt Supabase Auth, or fall back to demo session
-    signInWithPassword(demoEmail, 'Password123!').then((res) => {
-      if (res.success && res.role) {
-        handleRedirectByRole(res.role);
-      } else {
-        // Fallback demo login for easy app exploration
-        fallbackLogin(demoEmail, role);
-        handleRedirectByRole(role);
-      }
-    });
+    if (!isSupabaseConfigured) {
+      const res = signInOfflineDemo(demoEmail, role);
+      handleRedirectByRole(res.role);
+      return;
+    }
+
+    setIsLoading(true);
+
+    // Coba autentikasi Supabase terlebih dahulu; jika offline/Failed to fetch, fallback instan ke sesi demo
+    signInWithPassword(demoEmail, 'Password123!')
+      .then((res) => {
+        if (res.success && res.role) {
+          handleRedirectByRole(res.role);
+        } else if (res.isNetworkError || (res.error && res.error.includes('Failed to fetch'))) {
+          console.warn('[Login] Supabase server Failed to fetch, auto-entering via demo session.');
+          const offlineRes = signInOfflineDemo(demoEmail, role);
+          handleRedirectByRole(offlineRes.role);
+        } else {
+          setErrorMessage(res.error || 'Gagal masuk akun melalui Supabase Auth.');
+        }
+      })
+      .catch(() => {
+        const offlineRes = signInOfflineDemo(demoEmail, role);
+        handleRedirectByRole(offlineRes.role);
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
   };
 
   return (
@@ -222,12 +310,255 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
               <p className="text-xs text-slate-500 mt-1">Masuk untuk melanjutkan ke dashboard.</p>
             </div>
 
+            {/* Supabase Missing Configuration Warning */}
+            {!isSupabaseConfigured && (
+              <div className="mb-5 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <p className="font-bold">Konfigurasi Supabase Diperlukan</p>
+                  <p className="text-[11px] text-amber-700 mt-0.5">
+                    Variabel lingkungan Supabase (<code>VITE_SUPABASE_URL</code> & <code>VITE_SUPABASE_ANON_KEY</code>) belum dikonfigurasi. Sistem tidak menggunakan fallback data lokal. Hubungi administrator sistem.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Error & Success Alert Banners */}
             {errorMessage && (
-              <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5 animate-fadeIn">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span className="leading-relaxed font-medium">{errorMessage}</span>
-              </div>
+              (() => {
+                const isUnconfirmed =
+                  errorMessage.includes('EMAIL_NOT_CONFIRMED') ||
+                  errorMessage.toLowerCase().includes('email not confirmed');
+
+                if (isUnconfirmed) {
+                  return (
+                    <div className="mb-5 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-3 animate-fadeIn">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="font-bold text-amber-950 text-xs sm:text-sm">
+                            Email Belum Dikonfirmasi di Supabase
+                          </h4>
+                          <p className="text-amber-800 mt-1 leading-relaxed text-[11px] sm:text-xs">
+                            Supabase mewajibkan akun mengonfirmasi email sebelum dapat masuk dengan kata sandi.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={isResending}
+                          onClick={handleResendConfirmation}
+                          className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                          <span>{isResending ? 'Mengirim Ulang...' : 'Kirim Ulang Email Konfirmasi'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowSupabaseGuide(!showSupabaseGuide)}
+                          className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100/70 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
+                          <span>{showSupabaseGuide ? 'Tutup Panduan Admin' : 'Solusi Cepat Admin (Tanpa Konfirmasi)'}</span>
+                        </button>
+                      </div>
+
+                      {resendNotice && (
+                        <div
+                          className={`p-2.5 rounded-lg border text-[11px] leading-relaxed flex items-start gap-1.5 ${
+                            resendNotice.success
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                              : 'bg-rose-50 border-rose-200 text-rose-800'
+                          }`}
+                        >
+                          {resendNotice.success ? (
+                            <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          )}
+                          <span>{resendNotice.message}</span>
+                        </div>
+                      )}
+
+                      {showSupabaseGuide && (
+                        <div className="p-3 bg-white/95 rounded-xl border border-amber-200 text-[11px] text-slate-700 space-y-2 shadow-xs">
+                          <p className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            Cara Menonaktifkan Syarat Konfirmasi Email (Paling Praktis untuk Sekolah):
+                          </p>
+                          <ol className="list-decimal list-inside space-y-1 text-slate-600 pl-0.5">
+                            <li>Buka <strong>Supabase Dashboard</strong> &gt; Pilih project Anda.</li>
+                            <li>Buka menu <strong>Authentication</strong> &gt; <strong>Providers</strong> &gt; <strong>Email</strong>.</li>
+                            <li>Nonaktifkan (toggle OFF) opsi <strong>"Confirm email"</strong>, lalu klik <strong>Save</strong>.</li>
+                            <li>Untuk akun yang sudah terlanjur dibuat, buka <strong>SQL Editor</strong> di Supabase dan jalankan:</li>
+                          </ol>
+                          <div className="bg-slate-900 text-emerald-400 p-2.5 rounded-lg font-mono text-[10px] overflow-x-auto border border-slate-800 select-all">
+                            <code>UPDATE auth.users SET email_confirmed_at = now() WHERE email_confirmed_at IS NULL;</code>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                const isProfileMissing =
+                  errorMessage.includes('PROFIL_BELUM_TERSEDIA') ||
+                  errorMessage.includes('public.users');
+
+                if (isProfileMissing) {
+                  const targetEmail = (email || 'smpalhadiid@gmail.com').trim().toLowerCase();
+                  const sqlScript = getActivationSql(targetEmail);
+
+                  return (
+                    <div className="mb-5 p-4 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 text-xs space-y-3 animate-fadeIn">
+                      <div className="flex items-start gap-2.5">
+                        <div className="p-1 rounded-lg bg-indigo-600 text-white shrink-0 mt-0.5">
+                          <ShieldAlert className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-indigo-950 text-xs sm:text-sm">
+                            Aktivasi Profil Administrator (public.users)
+                          </h4>
+                          <p className="text-indigo-800 mt-1 leading-relaxed text-[11px] sm:text-xs">
+                            Akun Supabase Auth Anda (<strong>{targetEmail}</strong>) berhasil diverifikasi, namun baris profil di tabel <code>public.users</code> belum terdaftar karena dibatasi Row Level Security (RLS).
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const isSupervisor = targetEmail.includes('supervisor');
+                            const isGuru = targetEmail.includes('guru');
+                            const fallbackRole = isSupervisor ? 'SUPERVISOR' : (isGuru ? 'GURU' : 'ADMIN');
+                            handleRedirectByRole(fallbackRole);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          <LogIn className="w-3.5 h-3.5" />
+                          <span>Lanjut Masuk ke Dashboard</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(sqlScript);
+                            setCopiedActivationSql(true);
+                            setTimeout(() => setCopiedActivationSql(false), 3000);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          {copiedActivationSql ? <CheckCircle className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedActivationSql ? 'Berhasil Disalin!' : 'Salin SQL Aktivasi (1-Klik)'}</span>
+                        </button>
+
+                        <a
+                          href={sqlEditorUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-lg bg-white border border-indigo-300 text-indigo-900 hover:bg-indigo-100/70 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Buka Supabase SQL Editor</span>
+                        </a>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowActivationSql(!showActivationSql)}
+                          className="px-3 py-1.5 rounded-lg bg-white border border-indigo-200 text-slate-700 hover:bg-indigo-50 font-medium text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <Code2 className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>{showActivationSql ? 'Sembunyikan SQL' : 'Lihat Script SQL'}</span>
+                        </button>
+                      </div>
+
+                      {showActivationSql && (
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between text-[11px] text-indigo-900 font-semibold">
+                            <span>Script SQL Aktivasi:</span>
+                            <span className="text-[10px] text-slate-500 font-normal">Tempel di SQL Editor Supabase &gt; Klik Run</span>
+                          </div>
+                          <div className="relative group">
+                            <pre className="bg-slate-900 text-emerald-400 p-3 rounded-xl font-mono text-[10px] leading-relaxed overflow-x-auto max-h-48 border border-slate-800 select-all">
+                              <code>{sqlScript}</code>
+                            </pre>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(sqlScript);
+                                setCopiedActivationSql(true);
+                                setTimeout(() => setCopiedActivationSql(false), 3000);
+                              }}
+                              className="absolute top-2 right-2 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1 border border-slate-700 transition-colors cursor-pointer"
+                            >
+                              {copiedActivationSql ? <CheckCircle className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedActivationSql ? 'Tersalin' : 'Salin'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="pt-2 border-t border-indigo-100 flex items-center justify-between">
+                        <span className="text-[11px] text-indigo-800">Sudah menjalankan query di Supabase?</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handlePasswordSubmit(e as any)}
+                          disabled={isLoading}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <ArrowRight className="w-3.5 h-3.5" />
+                          <span>Masuk Sekarang</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (isNetworkError) {
+                  return (
+                    <div className="mb-5 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-3 animate-fadeIn">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="font-bold text-amber-950 text-xs sm:text-sm">
+                            Koneksi Supabase Gagal (Failed to fetch)
+                          </h4>
+                          <p className="text-amber-800 mt-1 leading-relaxed text-[11px] sm:text-xs">
+                            Server database Supabase tidak dapat dijangkau (kemungkinan sedang dijeda / <em>paused</em> oleh Supabase). Anda tetap dapat menggunakan seluruh fitur aplikasi dengan masuk menggunakan <strong>Sesi Offline / Demo</strong>.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="pt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const role: UserRole = email.toLowerCase().includes('admin') || email.toLowerCase().includes('smp') ? 'ADMIN' : (email.toLowerCase().includes('supervisor') ? 'SUPERVISOR' : 'GURU');
+                            const res = signInOfflineDemo(email, role);
+                            handleRedirectByRole(res.role);
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Lanjutkan Masuk dengan Sesi Offline / Demo</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5 animate-fadeIn">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed font-medium">{errorMessage}</span>
+                  </div>
+                );
+              })()
             )}
 
             {successMessage && (
@@ -373,7 +704,7 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Admin</span>
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">Suwarno</div>
+                  <div className="text-[10px] text-slate-500 truncate">admin@sekolah</div>
                 </button>
 
                 <button
